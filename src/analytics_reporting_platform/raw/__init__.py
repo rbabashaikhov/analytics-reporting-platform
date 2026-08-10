@@ -50,6 +50,14 @@ from analytics_reporting_platform.raw.monthly_metrics import (
     extract_monthly_metrics,
     metric_names_for_segment,
 )
+from analytics_reporting_platform.raw.wordstat_brand_queries import (
+    BUSINESS_KEY_COLUMNS as WORDSTAT_BRAND_BUSINESS_KEY_COLUMNS,
+    OUTPUT_COLUMNS as WORDSTAT_BRAND_OUTPUT_COLUMNS,
+    REQUIRED_QUERIES as WORDSTAT_REQUIRED_QUERIES,
+    WordstatBrandQueriesResult,
+    extract_wordstat_brand_queries,
+    extract_wordstat_brand_queries_range,
+)
 from analytics_reporting_platform.raw.repository import (
     MART_SPECS,
     MartSpec,
@@ -85,6 +93,10 @@ __all__ = [
     "PersistMonthResult",
     "RawExtractionError",
     "RawPersistenceError",
+    "WORDSTAT_BRAND_BUSINESS_KEY_COLUMNS",
+    "WORDSTAT_BRAND_OUTPUT_COLUMNS",
+    "WORDSTAT_REQUIRED_QUERIES",
+    "WordstatBrandQueriesResult",
     "adobe_month_date_range",
     "build_metrics_payload",
     "build_monthly_by_section_requests",
@@ -96,6 +108,8 @@ __all__ = [
     "extract_monthly_by_section",
     "extract_monthly_by_url",
     "extract_monthly_metrics",
+    "extract_wordstat_brand_queries",
+    "extract_wordstat_brand_queries_range",
     "metric_names_for_segment",
     "month_date_range_bounds",
     "month_exists",

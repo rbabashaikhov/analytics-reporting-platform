@@ -92,8 +92,10 @@ class MonthlyExecutionError(RuntimeError):
 class MonthlyPipelineDeps:
     """Injected runtime dependencies for Monthly execution.
 
-    Adobe client + client config are required only when the RAW stage will
-    actually extract (rebuild, or incremental with missing RAW month).
+    Adobe client + client config are required only when the RAW Adobe stage will
+    actually extract (rebuild, or incremental with missing Adobe RAW month).
+    Wordstat client is required for reporting months (>= 2026-01) when the
+    Wordstat RAW mart is missing or being rebuilt.
 
     Engine types are intentionally untyped here to keep this module free of
     SQLAlchemy import coupling for lightweight Airflow resolve-period imports.
@@ -104,6 +106,7 @@ class MonthlyPipelineDeps:
     cdm_engine: object
     adobe_reports: object = None
     client_config: object = None
+    wordstat_client: object = None
     on_event: Optional[EventHook] = None
 
 

@@ -230,15 +230,30 @@ def check_coverage(
     cdm_end: date,
 ) -> list[SuiteCheck]:
     """Full Monthly coverage suite across RAW/CALC/CDM."""
+    from analytics_reporting_platform.cdm.models import DEFAULT_REPORT_START
+
     checks: list[SuiteCheck] = []
+    adobe_raw = tuple(s for s in RAW_SPECS if s.mart != "wordstat_brand_queries")
+    wordstat_raw = tuple(s for s in RAW_SPECS if s.mart == "wordstat_brand_queries")
     checks.extend(
         check_layer_coverage(
             layer="raw",
             engines=engines,
-            specs=RAW_SPECS,
+            specs=adobe_raw,
             expected_months=month_range(raw_start, raw_end),
         )
     )
+    if wordstat_raw:
+        ws_start = max(raw_start, DEFAULT_REPORT_START)
+        if ws_start <= raw_end:
+            checks.extend(
+                check_layer_coverage(
+                    layer="raw",
+                    engines=engines,
+                    specs=wordstat_raw,
+                    expected_months=month_range(ws_start, raw_end),
+                )
+            )
     checks.extend(
         check_layer_coverage(
             layer="calc",

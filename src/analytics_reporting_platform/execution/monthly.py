@@ -11,11 +11,13 @@ from typing import Callable, Optional, Protocol, Sequence
 from sqlalchemy.engine import Engine
 
 from analytics_reporting_platform.calc import (
+    build_brand_demand,
     build_explore_buying_guides_kpi as build_calc_explore_bg,
     build_monthly_channel_mix,
     build_monthly_kpi,
     build_monthly_search_engines,
     build_monthly_section_share,
+    persist_brand_demand,
     persist_explore_buying_guides_kpi as persist_calc_explore_bg,
     persist_monthly_channel_mix,
     persist_monthly_kpi,
@@ -30,6 +32,7 @@ from analytics_reporting_platform.cdm import (
     build_geo_traffic_by_section,
     build_geo_traffic_kpi,
     build_geo_traffic_trend,
+    build_organic_brand_demand,
     build_organic_search_engine_mix,
     build_organic_search_engine_trend,
     build_organic_search_kpi,
@@ -46,6 +49,7 @@ from analytics_reporting_platform.cdm import (
     persist_geo_traffic_by_section,
     persist_geo_traffic_kpi,
     persist_geo_traffic_trend,
+    persist_organic_brand_demand,
     persist_organic_search_engine_mix,
     persist_organic_search_engine_trend,
     persist_organic_search_kpi,
@@ -55,7 +59,7 @@ from analytics_reporting_platform.cdm import (
     persist_traffic_kpi,
     persist_traffic_source_mix,
 )
-from analytics_reporting_platform.cdm.models import CdmPeriodConfig
+from analytics_reporting_platform.cdm.models import CdmPeriodConfig, DEFAULT_REPORT_START
 from analytics_reporting_platform.execution.models import (
     ExecutionMode,
     MartRunResult,
@@ -76,22 +80,29 @@ from analytics_reporting_platform.raw import (
     extract_monthly_by_section,
     extract_monthly_by_url,
     extract_monthly_metrics,
+    extract_wordstat_brand_queries,
     month_exists,
     persist_month,
 )
-
 
 class SupportsPostReport(Protocol):
     def post_report(self, payload: object) -> object: ...
 
 
-RAW_MARTS: tuple[str, ...] = ("monthly_metrics", "monthly_by_section", "monthly_by_url")
+ADOBE_RAW_MARTS: tuple[str, ...] = (
+    "monthly_metrics",
+    "monthly_by_section",
+    "monthly_by_url",
+)
+WORDSTAT_RAW_MART: str = "wordstat_brand_queries"
+RAW_MARTS: tuple[str, ...] = ADOBE_RAW_MARTS + (WORDSTAT_RAW_MART,)
 CALC_MARTS: tuple[str, ...] = (
     "monthly_kpi",
     "monthly_channel_mix",
     "monthly_search_engines",
     "monthly_section_share",
     "explore_buying_guides_kpi",
+    "brand_demand",
 )
 CDM_MARTS: tuple[str, ...] = (
     "dim_month",
@@ -104,12 +115,24 @@ CDM_MARTS: tuple[str, ...] = (
     "organic_search_kpi",
     "organic_search_engine_mix",
     "organic_search_engine_trend",
+    "organic_brand_demand",
     "explore_buying_guides_kpi",
     "explore_buying_guides_trend",
     "sections_mix",
     "top_pages",
     "device_section_mix",
 )
+
+
+def raw_marts_for_month(month: date) -> tuple[str, ...]:
+    """RAW marts required for completeness of ``month``.
+
+    Wordstat Brand Demand starts at the reporting boundary (2026-01).
+    Earlier Adobe RAW history remains Adobe-only so 2025 months stay complete.
+    """
+    if month >= DEFAULT_REPORT_START:
+        return RAW_MARTS
+    return ADOBE_RAW_MARTS
 
 
 def _emit(
@@ -141,7 +164,7 @@ def _persist_mode(mode: ExecutionMode) -> str:
 
 
 def _raw_month_complete(raw_engine: Engine, month: date) -> bool:
-    return all(month_exists(raw_engine, mart, month) for mart in RAW_MARTS)
+    return all(month_exists(raw_engine, mart, month) for mart in raw_marts_for_month(month))
 
 
 def _run_raw(
@@ -151,20 +174,27 @@ def _run_raw(
     *,
     dry_run: bool,
 ) -> StageRunResult:
-    planned = tuple(MartRunResult(mart=m, status="planned") for m in RAW_MARTS)
+    required_marts = raw_marts_for_month(month)
+    planned = tuple(MartRunResult(mart=m, status="planned") for m in required_marts)
     if dry_run:
         return StageRunResult(stage="raw", status="planned", marts=planned)
 
     if mode == "incremental" and _raw_month_complete(deps.raw_engine, month):
         skipped = tuple(
             MartRunResult(mart=m, status="skipped", detail="month already present")
-            for m in RAW_MARTS
+            for m in required_marts
         )
         return StageRunResult(stage="raw", status="skipped", marts=skipped)
 
     if deps.adobe_reports is None or deps.client_config is None:
         raise MonthlyExecutionError(
             "RAW extraction requires adobe_reports and client_config dependencies"
+        )
+
+    needs_wordstat = WORDSTAT_RAW_MART in required_marts
+    if needs_wordstat and deps.wordstat_client is None:
+        raise MonthlyExecutionError(
+            "RAW Wordstat extraction requires wordstat_client dependency"
         )
 
     persist_mode = _persist_mode(mode)
@@ -202,8 +232,29 @@ def _run_raw(
         mart_results.append(
             MartRunResult(mart="monthly_by_url", status="success", detail=res_u.status)
         )
+
+        if needs_wordstat:
+            wordstat = extract_wordstat_brand_queries(deps.wordstat_client, month)
+            res_w = persist_month(
+                deps.raw_engine,
+                "wordstat_brand_queries",
+                wordstat.dataframe,
+                month,
+                mode=persist_mode,  # type: ignore[arg-type]
+            )
+            mart_results.append(
+                MartRunResult(
+                    mart="wordstat_brand_queries",
+                    status="success",
+                    detail=res_w.status,
+                )
+            )
     except Exception as exc:
-        failed_mart = RAW_MARTS[len(mart_results)] if len(mart_results) < len(RAW_MARTS) else "raw"
+        failed_mart = (
+            required_marts[len(mart_results)]
+            if len(mart_results) < len(required_marts)
+            else "raw"
+        )
         mart_results.append(
             MartRunResult(mart=failed_mart, status="failed", detail=type(exc).__name__)
         )
@@ -260,6 +311,13 @@ def _run_calc(
             "explore_buying_guides_kpi",
             lambda: build_calc_explore_bg(deps.raw_engine, month),
             lambda df: persist_calc_explore_bg(
+                deps.calc_engine, df, month, mode=persist_mode  # type: ignore[arg-type]
+            ),
+        ),
+        (
+            "brand_demand",
+            lambda: build_brand_demand(deps.raw_engine, month),
+            lambda df: persist_brand_demand(
                 deps.calc_engine, df, month, mode=persist_mode  # type: ignore[arg-type]
             ),
         ),
@@ -399,6 +457,13 @@ def _run_cdm(
             "organic_search_kpi",
             lambda: build_organic_search_kpi(deps.calc_engine, month),
             lambda df: persist_organic_search_kpi(
+                deps.cdm_engine, df, month, mode=persist_mode  # type: ignore[arg-type]
+            ),
+        )
+        _month_step(
+            "organic_brand_demand",
+            lambda: build_organic_brand_demand(deps.calc_engine, month),
+            lambda df: persist_organic_brand_demand(
                 deps.cdm_engine, df, month, mode=persist_mode  # type: ignore[arg-type]
             ),
         )
@@ -556,7 +621,7 @@ def run_monthly_cdm(
     allow_future: bool = False,
     cdm_period: Optional[CdmPeriodConfig] = None,
 ) -> StageRunResult:
-    """Execute Monthly CDM stage only (15 Monthly tables for the period window)."""
+    """Execute Monthly CDM stage only (Monthly CDM marts for the period window)."""
     if mode not in ("incremental", "rebuild"):
         raise PeriodValidationError(f"Unsupported execution mode: {mode!r}")
     period = validate_execution_month(month, today=today, allow_future=allow_future)
@@ -720,12 +785,15 @@ def run_monthly_period(
 
 
 __all__ = [
+    "ADOBE_RAW_MARTS",
     "CALC_MARTS",
     "CDM_MARTS",
     "MonthlyExecutionError",
     "MonthlyPipelineDeps",
     "RAW_MARTS",
     "SupportsPostReport",
+    "WORDSTAT_RAW_MART",
+    "raw_marts_for_month",
     "run_monthly_calc",
     "run_monthly_cdm",
     "run_monthly_period",

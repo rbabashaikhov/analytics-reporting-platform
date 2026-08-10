@@ -61,6 +61,7 @@ CALC_SPECS: tuple[ValidationTableSpec, ...] = (
         "calc_explore_buying_guides_kpi",
         ("month", "section_name", "kpi_name"),
     ),
+    ValidationTableSpec("calc", "brand_demand", "calc_brand_demand", ("month",)),
 )
 
 # Month-scoped CDM + window tables that must contain the target month.
@@ -106,6 +107,9 @@ CDM_SPECS: tuple[ValidationTableSpec, ...] = (
         "cdm_organic_search_engine_trend",
         ("month",),
         "window_contains_month",
+    ),
+    ValidationTableSpec(
+        "cdm", "organic_brand_demand", "cdm_organic_brand_demand", ("month",)
     ),
     ValidationTableSpec(
         "cdm",

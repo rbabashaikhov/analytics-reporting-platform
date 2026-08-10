@@ -47,6 +47,12 @@ from analytics_reporting_platform.cdm.models import (
     prev_month_start,
     safe_divide,
 )
+from analytics_reporting_platform.cdm.organic_brand_demand import (
+    BUSINESS_KEY_COLUMNS as ORGANIC_BRAND_DEMAND_KEYS,
+    OUTPUT_COLUMNS as ORGANIC_BRAND_DEMAND_OUTPUT,
+    build_organic_brand_demand,
+    persist_organic_brand_demand,
+)
 from analytics_reporting_platform.cdm.organic_search import (
     ENGINE_MIX_KEYS,
     ENGINE_MIX_OUTPUT,
@@ -123,6 +129,8 @@ __all__ = [
     "GEO_TREND_OUTPUT",
     "MARKETING_CHANNELS",
     "MonthInput",
+    "ORGANIC_BRAND_DEMAND_KEYS",
+    "ORGANIC_BRAND_DEMAND_OUTPUT",
     "ORGANIC_KPI_KEYS",
     "ORGANIC_KPI_ORDER",
     "ORGANIC_KPI_OUTPUT",
@@ -149,6 +157,7 @@ __all__ = [
     "build_geo_traffic_by_section",
     "build_geo_traffic_kpi",
     "build_geo_traffic_trend",
+    "build_organic_brand_demand",
     "build_organic_search_engine_mix",
     "build_organic_search_engine_trend",
     "build_organic_search_kpi",
@@ -169,6 +178,7 @@ __all__ = [
     "persist_geo_traffic_by_section",
     "persist_geo_traffic_kpi",
     "persist_geo_traffic_trend",
+    "persist_organic_brand_demand",
     "persist_organic_search_engine_mix",
     "persist_organic_search_engine_trend",
     "persist_organic_search_kpi",

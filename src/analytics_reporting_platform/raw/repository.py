@@ -17,7 +17,12 @@ from sqlalchemy.engine import Connection
 
 from analytics_reporting_platform.raw.models import MonthInput, RawExtractionError, parse_month_start
 
-RawMart = Literal["monthly_metrics", "monthly_by_section", "monthly_by_url"]
+RawMart = Literal[
+    "monthly_metrics",
+    "monthly_by_section",
+    "monthly_by_url",
+    "wordstat_brand_queries",
+]
 PersistMode = Literal["skip", "replace"]
 PersistStatus = Literal["inserted", "replaced", "skipped"]
 
@@ -77,6 +82,13 @@ MART_SPECS: Mapping[RawMart, MartSpec] = {
         columns=("month", "page_url", "visits", "load_dt"),
         business_key=("month", "page_url"),
         non_null_columns=("month", "page_url", "load_dt"),
+    ),
+    "wordstat_brand_queries": MartSpec(
+        logical="wordstat_brand_queries",
+        table_name="raw_wordstat_brand_queries",
+        columns=("month", "query", "count", "load_dt"),
+        business_key=("month", "query"),
+        non_null_columns=("month", "query", "count", "load_dt"),
     ),
 }
 
@@ -196,6 +208,12 @@ def validate_persist_dataframe(
         # Preserve nullable integer semantics when possible.
         try:
             frame["visits"] = frame["visits"].astype("Int64")
+        except (TypeError, ValueError):
+            pass
+    if "count" in frame.columns:
+        frame["count"] = pd.to_numeric(frame["count"], errors="coerce")
+        try:
+            frame["count"] = frame["count"].astype("Int64")
         except (TypeError, ValueError):
             pass
 

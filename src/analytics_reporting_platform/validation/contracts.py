@@ -10,6 +10,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from analytics_reporting_platform.calc import explore_buying_guides_kpi as explore_calc
+from analytics_reporting_platform.calc import brand_demand as brand_demand_mod
 from analytics_reporting_platform.calc import monthly_channel_mix as channel_mix
 from analytics_reporting_platform.calc import monthly_kpi as kpi_mod
 from analytics_reporting_platform.calc import monthly_search_engines as search_engines
@@ -17,6 +18,7 @@ from analytics_reporting_platform.calc import monthly_section_share as section_s
 from analytics_reporting_platform.cdm import dim_month as dim_month_mod
 from analytics_reporting_platform.cdm import explore_buying_guides as explore_cdm
 from analytics_reporting_platform.cdm import geo as geo_mod
+from analytics_reporting_platform.cdm import organic_brand_demand as organic_brand_mod
 from analytics_reporting_platform.cdm import organic_search as organic_mod
 from analytics_reporting_platform.cdm import sections as sections_mod
 from analytics_reporting_platform.cdm import traffic as traffic_mod
@@ -68,6 +70,8 @@ def build_mart_contracts() -> tuple[MartContract, ...]:
         non_neg: tuple[str, ...]
         if logical == "monthly_by_url":
             non_neg = ("visits",)
+        elif logical == "wordstat_brand_queries":
+            non_neg = ("count",)
         elif logical in ("monthly_metrics", "monthly_by_section"):
             # metric_value may be duration/rate; non-neg enforced selectively in value checks.
             non_neg = ()
@@ -151,6 +155,15 @@ def build_mart_contracts() -> tuple[MartContract, ...]:
                 "calc_dt",
             ),
             non_negative=("kpi_value",),
+        ),
+        MartContract(
+            layer="calc",
+            mart="brand_demand",
+            table="calc_brand_demand",
+            columns=brand_demand_mod.OUTPUT_COLUMNS,
+            business_key=brand_demand_mod.BUSINESS_KEY_COLUMNS,
+            required_non_null=("month", "brand_demand", "calc_dt"),
+            non_negative=("brand_demand",),
         ),
     )
 
@@ -246,6 +259,15 @@ def build_mart_contracts() -> tuple[MartContract, ...]:
             business_key=organic_mod.ORGANIC_KPI_KEYS,
             required_non_null=("month", "kpi_name", "display_order", "cdm_dt"),
             non_negative=("kpi_value",),
+        ),
+        MartContract(
+            layer="cdm",
+            mart="organic_brand_demand",
+            table="cdm_organic_brand_demand",
+            columns=organic_brand_mod.OUTPUT_COLUMNS,
+            business_key=organic_brand_mod.BUSINESS_KEY_COLUMNS,
+            required_non_null=("month", "metric", "cdm_dt"),
+            non_negative=("metric",),
         ),
         MartContract(
             layer="cdm",

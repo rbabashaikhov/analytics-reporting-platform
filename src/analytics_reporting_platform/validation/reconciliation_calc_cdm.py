@@ -45,6 +45,7 @@ def reconcile_calc_to_cdm(
     checks.extend(_cdm_geo_trend(raw_engine, cdm_engine, trend_months))
     checks.extend(_cdm_geo_by_section(calc_engine, cdm_engine, months))
     checks.extend(_cdm_organic_kpi(calc_engine, cdm_engine, months))
+    checks.extend(_cdm_organic_brand_demand(calc_engine, cdm_engine, months))
     checks.extend(_cdm_organic_engine_mix(calc_engine, cdm_engine, months, cdm_end))
     checks.extend(_cdm_organic_engine_trend(raw_engine, cdm_engine, trend_months))
     checks.extend(_cdm_explore_kpi(calc_engine, cdm_engine, months))
@@ -459,6 +460,52 @@ def _cdm_organic_kpi(calc: Engine, cdm: Engine, months: Sequence[date]) -> list[
             name="recon.calc_cdm.organic_search_kpi",
             status="PASS" if ok else "FAIL",
             detail=None if ok else f"mismatches={mm}; missing={len(missing)}",
+        )
+    ]
+
+
+def _cdm_organic_brand_demand(
+    calc: Engine, cdm: Engine, months: Sequence[date]
+) -> list[SuiteCheck]:
+    calc_sql = text(
+        """
+        SELECT month::date AS month, brand_demand::bigint AS brand_demand
+        FROM calc_brand_demand
+        WHERE month = ANY(:months)
+        """
+    )
+    cdm_sql = text(
+        """
+        SELECT month::date AS month, metric::bigint AS metric
+        FROM cdm_organic_brand_demand
+        WHERE month = ANY(:months)
+        """
+    )
+    with calc.connect() as conn:
+        calc_rows = {
+            r.month: int(r.brand_demand)
+            for r in conn.execute(calc_sql, {"months": list(months)}).fetchall()
+        }
+    with cdm.connect() as conn:
+        cdm_rows = {
+            r.month: int(r.metric)
+            for r in conn.execute(cdm_sql, {"months": list(months)}).fetchall()
+        }
+    mm, missing_right, missing_left = _cmp_maps(calc_rows, cdm_rows, tol=COUNT_TOL)
+    ok = mm == 0 and missing_right == 0 and missing_left == 0
+    return [
+        SuiteCheck(
+            category="calc_cdm_reconciliation",
+            name="recon.calc_cdm.organic_brand_demand",
+            status="PASS" if ok else "FAIL",
+            detail=(
+                None
+                if ok
+                else (
+                    f"mismatches={mm}; missing_in_cdm={missing_right}; "
+                    f"extra_in_cdm={missing_left}"
+                )
+            ),
         )
     ]
 

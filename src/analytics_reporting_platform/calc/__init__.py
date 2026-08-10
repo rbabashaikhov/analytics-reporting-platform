@@ -5,6 +5,14 @@ Implemented: ``calc_monthly_kpi``, ``calc_monthly_channel_mix``,
 ``calc_explore_buying_guides_kpi``.
 """
 
+from analytics_reporting_platform.calc.brand_demand import (
+    BUSINESS_KEY_COLUMNS as BRAND_DEMAND_BUSINESS_KEY_COLUMNS,
+    OUTPUT_COLUMNS as BRAND_DEMAND_OUTPUT_COLUMNS,
+    SOURCE_TABLE as BRAND_DEMAND_SOURCE_TABLE,
+    TARGET_TABLE as BRAND_DEMAND_TARGET_TABLE,
+    BrandDemandResult,
+    build_brand_demand,
+)
 from analytics_reporting_platform.calc.explore_buying_guides_kpi import (
     BUSINESS_KEY_COLUMNS as EXPLORE_BG_BUSINESS_KEY_COLUMNS,
     EXPLORE_BG_KPI_ORDER,
@@ -68,6 +76,7 @@ from analytics_reporting_platform.calc.monthly_section_share import (
 )
 from analytics_reporting_platform.calc.repository import (
     PersistCalcMonthResult,
+    persist_brand_demand,
     persist_explore_buying_guides_kpi,
     persist_monthly_channel_mix,
     persist_monthly_kpi,
@@ -76,7 +85,12 @@ from analytics_reporting_platform.calc.repository import (
 )
 
 __all__ = [
+    "BRAND_DEMAND_BUSINESS_KEY_COLUMNS",
+    "BRAND_DEMAND_OUTPUT_COLUMNS",
+    "BRAND_DEMAND_SOURCE_TABLE",
+    "BRAND_DEMAND_TARGET_TABLE",
     "BUSINESS_KEY_COLUMNS",
+    "BrandDemandResult",
     "CHANNEL_MIX_BUSINESS_KEY_COLUMNS",
     "CHANNEL_MIX_OUTPUT_COLUMNS",
     "CHANNEL_MIX_SOURCE_METRIC",
@@ -110,6 +124,7 @@ __all__ = [
     "MonthlySearchEnginesResult",
     "MonthlySectionShareResult",
     "PersistCalcMonthResult",
+    "build_brand_demand",
     "build_explore_buying_guides_kpi",
     "build_monthly_channel_mix",
     "build_monthly_kpi",
@@ -118,6 +133,7 @@ __all__ = [
     "metric_change_type",
     "metric_value_format",
     "parse_month_start",
+    "persist_brand_demand",
     "persist_explore_buying_guides_kpi",
     "persist_monthly_channel_mix",
     "persist_monthly_kpi",

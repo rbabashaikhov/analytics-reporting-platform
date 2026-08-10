@@ -47,6 +47,7 @@ def reconcile_raw_to_calc(
     checks.extend(_reconcile_search_engines(raw_engine, calc_engine, months))
     checks.extend(_reconcile_section_share(raw_engine, calc_engine, months))
     checks.extend(_reconcile_explore_bg(raw_engine, calc_engine, months))
+    checks.extend(_reconcile_brand_demand(raw_engine, calc_engine, months))
     return checks
 
 
@@ -422,6 +423,80 @@ def _reconcile_explore_bg(
                 None
                 if mm == 0 and not missing
                 else f"value_mismatches={mm}; missing_keys={len(missing)}"
+            ),
+        )
+    )
+    return checks
+
+
+def _reconcile_brand_demand(
+    raw_engine: Engine, calc_engine: Engine, months: Sequence[date]
+) -> list[SuiteCheck]:
+    """calc.brand_demand must equal RAW samsung + самсунг counts per month."""
+    from analytics_reporting_platform.raw.wordstat_brand_queries import REQUIRED_QUERIES
+
+    checks: list[SuiteCheck] = []
+    raw_sql = text(
+        """
+        SELECT month::date AS month, query, count::bigint AS count
+        FROM raw_wordstat_brand_queries
+        WHERE month = ANY(:months)
+          AND query = ANY(:queries)
+        """
+    )
+    calc_sql = text(
+        """
+        SELECT month::date AS month, brand_demand::bigint AS brand_demand
+        FROM calc_brand_demand
+        WHERE month = ANY(:months)
+        """
+    )
+    with raw_engine.connect() as conn:
+        raw_rows = list(
+            conn.execute(
+                raw_sql,
+                {"months": list(months), "queries": list(REQUIRED_QUERIES)},
+            ).fetchall()
+        )
+    with calc_engine.connect() as conn:
+        calc_rows = {
+            r.month: int(r.brand_demand)
+            for r in conn.execute(calc_sql, {"months": list(months)}).fetchall()
+        }
+
+    by_month: dict[date, dict[str, int]] = {m: {} for m in months}
+    for r in raw_rows:
+        by_month.setdefault(r.month, {})[str(r.query)] = int(r.count)
+
+    missing_queries = 0
+    value_mismatches = 0
+    missing_calc = 0
+    for month in months:
+        qmap = by_month.get(month, {})
+        for query in REQUIRED_QUERIES:
+            if query not in qmap:
+                missing_queries += 1
+        expected = sum(int(qmap.get(q, 0)) for q in REQUIRED_QUERIES)
+        if month not in calc_rows:
+            missing_calc += 1
+            continue
+        if abs(float(calc_rows[month]) - float(expected)) > COUNT_TOL:
+            value_mismatches += 1
+
+    ok = missing_queries == 0 and value_mismatches == 0 and missing_calc == 0
+    checks.append(
+        SuiteCheck(
+            category="raw_calc_reconciliation",
+            name="recon.raw_calc.brand_demand.sum_queries",
+            status="PASS" if ok else "FAIL",
+            detail=(
+                None
+                if ok
+                else (
+                    f"missing_queries={missing_queries}; "
+                    f"value_mismatches={value_mismatches}; "
+                    f"missing_calc_months={missing_calc}"
+                )
             ),
         )
     )

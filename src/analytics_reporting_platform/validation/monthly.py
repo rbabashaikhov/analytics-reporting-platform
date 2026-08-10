@@ -95,7 +95,17 @@ def _layer_presence_checks(
 ) -> list[ValidationCheck]:
     checks: list[ValidationCheck] = []
     for spec in specs:
-        sig = signatures[spec.table]
+        sig = signatures.get(spec.table)
+        if sig is None:
+            checks.append(
+                ValidationCheck(
+                    name=f"{layer}.{spec.mart}.present",
+                    status="FAIL",
+                    detail="missing signature for table",
+                    row_count=0,
+                )
+            )
+            continue
         ok = sig.row_count > 0
         checks.append(
             ValidationCheck(
@@ -114,7 +124,16 @@ def _duplicate_checks(
 ) -> list[ValidationCheck]:
     checks: list[ValidationCheck] = []
     for spec in specs:
-        sig = signatures[spec.table]
+        sig = signatures.get(spec.table)
+        if sig is None:
+            checks.append(
+                ValidationCheck(
+                    name=f"dup.{spec.layer}.{spec.mart}",
+                    status="FAIL",
+                    detail="missing signature for table",
+                )
+            )
+            continue
         ok = sig.duplicate_key_groups == 0
         checks.append(
             ValidationCheck(
@@ -208,14 +227,15 @@ def validate_monthly_raw_history(
         calc_engine=raw_engine,  # unused — specs are RAW-only
         cdm_engine=raw_engine,
         month=target,
-        specs=RAW_SPECS,
+        specs=tuple(s for s in RAW_SPECS if s.mart != "wordstat_brand_queries"),
     )
     by_table = {t.table: t for t in bundle.tables}
+    adobe_raw = [s for s in RAW_SPECS if s.mart != "wordstat_brand_queries"]
     checks: list[ValidationCheck] = []
     checks.extend(
-        _layer_presence_checks(layer="raw", specs=RAW_SPECS, signatures=by_table)
+        _layer_presence_checks(layer="raw", specs=adobe_raw, signatures=by_table)
     )
-    checks.extend(_duplicate_checks(by_table, list(RAW_SPECS)))
+    checks.extend(_duplicate_checks(by_table, adobe_raw))
     overall: OverallStatus = "FAIL" if any(c.status == "FAIL" for c in checks) else "PASS"
     return MonthlyValidationResult(month=target, overall=overall, checks=tuple(checks))
 

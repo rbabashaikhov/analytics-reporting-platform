@@ -139,11 +139,16 @@ def _table_has_month(engine: Any, table: str, month: date) -> bool:
 
 
 def raw_month_present(raw_engine: Any, month: date) -> bool:
-    """True when all Monthly RAW marts have rows for ``month``."""
-    from analytics_reporting_platform.execution.monthly import RAW_MARTS
+    """True when all Monthly RAW marts required for ``month`` have rows.
+
+    Wordstat Brand Demand is required only for reporting months (>= 2026-01).
+    """
+    from analytics_reporting_platform.execution.monthly import raw_marts_for_month
     from analytics_reporting_platform.raw.repository import month_exists
 
-    return all(month_exists(raw_engine, mart, month) for mart in RAW_MARTS)
+    return all(
+        month_exists(raw_engine, mart, month) for mart in raw_marts_for_month(month)
+    )
 
 
 def calc_month_present(calc_engine: Any, month: date) -> bool:

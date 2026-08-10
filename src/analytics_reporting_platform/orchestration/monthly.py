@@ -222,12 +222,28 @@ def build_monthly_pipeline_deps(
         aa = AdobeAuthClient(auth)
         adobe_reports = AdobeReportsClient(aa, adobe_cfg.report_suite_id)
 
+    wordstat_client = None
+    try:
+        from analytics_reporting_platform.sources.wordstat import (
+            WordstatClient,
+            load_wordstat_credentials,
+        )
+        from analytics_reporting_platform.sources.wordstat.errors import (
+            WordstatConfigurationError,
+        )
+
+        wordstat_creds = load_wordstat_credentials(resolved_env)
+        wordstat_client = WordstatClient(wordstat_creds)
+    except WordstatConfigurationError:
+        wordstat_client = None
+
     return MonthlyPipelineDeps(
         raw_engine=raw_engine,
         calc_engine=calc_engine,
         cdm_engine=cdm_engine,
         adobe_reports=adobe_reports,
         client_config=adobe_cfg,
+        wordstat_client=wordstat_client,
     )
 
 
@@ -362,6 +378,7 @@ def _prepare_deps(
             cdm_engine=effective_deps.cdm_engine,
             adobe_reports=effective_deps.adobe_reports,
             client_config=effective_deps.client_config,
+            wordstat_client=effective_deps.wordstat_client,
             on_event=_airflow_event_hook,
         )
     return effective_deps

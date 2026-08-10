@@ -13,6 +13,7 @@ from sqlalchemy.engine import Connection
 
 from analytics_reporting_platform.calc.models import CalcError, MonthInput, parse_month_start
 from analytics_reporting_platform.calc import explore_buying_guides_kpi as explore_bg_mod
+from analytics_reporting_platform.calc import brand_demand as brand_demand_mod
 from analytics_reporting_platform.calc import monthly_channel_mix as channel_mix_mod
 from analytics_reporting_platform.calc import monthly_kpi as kpi_mod
 from analytics_reporting_platform.calc import monthly_search_engines as search_engines_mod
@@ -159,6 +160,27 @@ def persist_explore_buying_guides_kpi(
     )
 
 
+def persist_brand_demand(
+    calc_engine: Engine,
+    dataframe: pd.DataFrame,
+    month: MonthInput,
+    *,
+    mode: CalcPersistMode = "replace",
+) -> PersistCalcMonthResult:
+    """Persist ``calc_brand_demand`` for exactly one month."""
+    return _persist_month(
+        calc_engine,
+        dataframe,
+        month,
+        mart="brand_demand",
+        table="calc_brand_demand",
+        output_columns=brand_demand_mod.OUTPUT_COLUMNS,
+        business_key_columns=brand_demand_mod.BUSINESS_KEY_COLUMNS,
+        required_non_null=("month", "brand_demand", "calc_dt"),
+        mode=mode,
+    )
+
+
 def _persist_month(
     calc_engine: Engine,
     dataframe: pd.DataFrame,
@@ -272,6 +294,7 @@ def _reject_frozen_baseline(engine: Engine) -> None:
 
 __all__ = [
     "PersistCalcMonthResult",
+    "persist_brand_demand",
     "persist_explore_buying_guides_kpi",
     "persist_monthly_channel_mix",
     "persist_monthly_kpi",
