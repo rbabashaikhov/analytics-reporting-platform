@@ -1,0 +1,42 @@
+# Analytics Reporting Platform — Portfolio Edition
+# Isolated PostgreSQL 14 historical DWH recovery environment
+#
+# Invoke later with project name and private env file, for example:
+#   docker compose -p arp-dwh-restore \
+#     --env-file "$HOME/Documents/private-data/analytics-reporting-platform/.env.dwh-restore" \
+#     -f infra/dwh-restore/docker-compose.yml \
+#     up -d
+#
+# DO NOT start this stack or restore dumps until explicitly approved.
+# DO NOT bind to 0.0.0.0. DO NOT reuse Airflow / Superset / DataLens Postgres.
+
+services:
+  postgres:
+    image: postgres:14
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:15432:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - arp_dwh_pg14_data:/var/lib/postgresql/data
+      - ${HOME}/Documents/private-data/analytics-reporting-platform/backups:/backups:ro
+    networks:
+      - arp_dwh_restore_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  arp_dwh_pg14_data:
+    name: arp_dwh_pg14_data
+
+networks:
+  arp_dwh_restore_net:
+    name: arp_dwh_restore_net
+    driver: bridge

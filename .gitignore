@@ -1,0 +1,126 @@
+# ---------------------------------------------------------------------------
+# Environment / secrets
+# ---------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+!**/.env.example
+
+# Private Adobe client identifier maps (never commit real IDs)
+client-config.yaml
+**/client-config.yaml
+!config/client-config.example.yaml
+
+# ---------------------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+wheels/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+.venv/
+venv/
+ENV/
+env/
+
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.cache/
+
+# ---------------------------------------------------------------------------
+# Jupyter / notebook execution artifacts
+# ---------------------------------------------------------------------------
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+**/.ipynb_checkpoints/**
+*.executed.ipynb
+
+# ---------------------------------------------------------------------------
+# Database dumps / backups (never commit)
+# ---------------------------------------------------------------------------
+*.sql
+*.dump
+*.backup
+*.bak
+
+# ---------------------------------------------------------------------------
+# Real datasets / exports (never commit)
+# ---------------------------------------------------------------------------
+*.csv
+*.tsv
+*.parquet
+*.feather
+*.xlsx
+*.xls
+*.xlsm
+*.ods
+
+# ---------------------------------------------------------------------------
+# Token / credential caches
+# ---------------------------------------------------------------------------
+**/token-cache/
+**/*token*.json
+.adobe/
+.cache/adobe*
+
+# ---------------------------------------------------------------------------
+# Private recovery / local-only data roots
+# ---------------------------------------------------------------------------
+private-data/
+**/private-data/**
+execution-work/
+**/execution-work/**
+runtime/
+**/runtime/**
+airflow-runtime/
+**/airflow-runtime/**
+
+# ---------------------------------------------------------------------------
+# Validation runtime artifacts (never commit)
+# Configurable root: ARP_VALIDATION_ARTIFACT_ROOT
+# ---------------------------------------------------------------------------
+**/validation.md
+**/validation.json
+**/monthly_private_pipeline/*/validation.md
+**/monthly_private_pipeline/*/validation.json
+
+# ---------------------------------------------------------------------------
+# Airflow local runtime (never commit)
+# ---------------------------------------------------------------------------
+airflow.cfg
+airflow.db
+**/logs/
+webserver_config.py
+
+# ---------------------------------------------------------------------------
+# IDE / OS
+# ---------------------------------------------------------------------------
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ---------------------------------------------------------------------------
+# Logs / temp
+# ---------------------------------------------------------------------------
+*.log
+logs/
+tmp/
+temp/
+.temp/

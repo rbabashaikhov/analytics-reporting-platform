@@ -1,0 +1,44 @@
+# Analytics Reporting Platform — Portfolio Edition
+# Isolated Monthly execution sandbox PostgreSQL
+#
+# DISPOSABLE. Independent from frozen baseline (arp-dwh-restore / :15432).
+#
+# Invoke example:
+#   docker compose -p arp-monthly-sandbox \
+#     --env-file <PRIVATE_ENV_FILE> \
+#     -f infra/monthly-sandbox/docker-compose.yml \
+#     up -d
+#
+# Required env vars (from private env file):
+#   POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB, ARP_BACKUPS_DIR
+
+services:
+  postgres:
+    image: postgres:14
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:15433:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - arp_monthly_sandbox_pg14_data:/var/lib/postgresql/data
+      - ${ARP_BACKUPS_DIR}:/backups:ro
+    networks:
+      - arp_monthly_sandbox_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  arp_monthly_sandbox_pg14_data:
+    name: arp_monthly_sandbox_pg14_data
+
+networks:
+  arp_monthly_sandbox_net:
+    name: arp_monthly_sandbox_net
+    driver: bridge
