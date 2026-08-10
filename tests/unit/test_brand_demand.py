@@ -154,7 +154,8 @@ def engines():
 
 
 def test_raw_marts_for_month_reporting_boundary() -> None:
-    assert raw_marts_for_month(date(2025, 6, 1)) == ADOBE_RAW_MARTS
+    assert raw_marts_for_month(date(2024, 12, 1)) == ADOBE_RAW_MARTS
+    assert "wordstat_brand_queries" in raw_marts_for_month(date(2025, 1, 1))
     assert "wordstat_brand_queries" in raw_marts_for_month(date(2026, 1, 1))
 
 

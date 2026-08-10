@@ -66,19 +66,12 @@ def _present_months(engine: Engine, table: str) -> set[date]:
     return {r[0] if isinstance(r[0], date) else date.fromisoformat(str(r[0])[:10]) for r in rows}
 
 
-def check_layer_coverage(
+def _layer_inventory_check(
     *,
     layer: LayerName,
-    engines: dict[LayerName, Engine],
+    engine: Engine,
     specs: Sequence[ValidationTableSpec],
-    expected_months: Sequence[date],
-) -> list[SuiteCheck]:
-    """For each mart: every expected month has row_count > 0; report missing/extra."""
-    checks: list[SuiteCheck] = []
-    expected = set(expected_months)
-    engine = engines[layer]
-
-    # Layer-level mart inventory
+) -> SuiteCheck:
     expected_tables = {s.table for s in specs}
     present_tables: set[str] = set()
     sql = text(
@@ -87,38 +80,51 @@ def check_layer_coverage(
         WHERE schemaname = 'public' AND tablename LIKE :pat
         """
     )
-    prefix = {"raw": "raw_aa_monthly_%", "calc": "calc_%", "cdm": "cdm_%"}[layer]
+    patterns = {
+        "raw": ("raw_aa_monthly_%", "raw_wordstat_%"),
+        "calc": ("calc_%",),
+        "cdm": ("cdm_%",),
+    }[layer]
     with engine.connect() as conn:
-        rows = conn.execute(sql, {"pat": prefix}).fetchall()
-    # Filter to monthly-ish; weekly guard handles weekly separately.
-    for (name,) in rows:
-        t = str(name)
-        if "weekly" in t:
-            continue
-        if layer == "calc" and not t.startswith("calc_"):
-            continue
-        if layer == "cdm" and not t.startswith("cdm_"):
-            continue
-        if layer == "raw" and not t.startswith("raw_aa_monthly_"):
-            continue
-        present_tables.add(t)
+        for pat in patterns:
+            rows = conn.execute(sql, {"pat": pat}).fetchall()
+            for (name,) in rows:
+                t = str(name)
+                if "weekly" in t:
+                    continue
+                present_tables.add(t)
 
     missing_marts = sorted(expected_tables - present_tables)
     extra_marts = sorted(present_tables - expected_tables)
-    checks.append(
-        SuiteCheck(
-            category="coverage",
-            name=f"coverage.{layer}.mart_inventory",
-            status="PASS" if not missing_marts and not extra_marts else "FAIL",
-            detail=(
-                None
-                if not missing_marts and not extra_marts
-                else f"present={len(present_tables & expected_tables)}/"
-                f"{len(expected_tables)}; missing={','.join(missing_marts) or '-'}; "
-                f"extra={','.join(extra_marts) or '-'}"
-            ),
-        )
+    return SuiteCheck(
+        category="coverage",
+        name=f"coverage.{layer}.mart_inventory",
+        status="PASS" if not missing_marts and not extra_marts else "FAIL",
+        detail=(
+            None
+            if not missing_marts and not extra_marts
+            else f"present={len(present_tables & expected_tables)}/"
+            f"{len(expected_tables)}; missing={','.join(missing_marts) or '-'}; "
+            f"extra={','.join(extra_marts) or '-'}"
+        ),
     )
+
+
+def check_layer_coverage(
+    *,
+    layer: LayerName,
+    engines: dict[LayerName, Engine],
+    specs: Sequence[ValidationTableSpec],
+    expected_months: Sequence[date],
+    include_inventory: bool = True,
+) -> list[SuiteCheck]:
+    """For each mart: every expected month has row_count > 0; report missing/extra."""
+    checks: list[SuiteCheck] = []
+    expected = set(expected_months)
+    engine = engines[layer]
+
+    if include_inventory:
+        checks.append(_layer_inventory_check(layer=layer, engine=engine, specs=specs))
 
     for spec in specs:
         if not _table_exists(engine, spec.table):
@@ -133,10 +139,7 @@ def check_layer_coverage(
             continue
         present = _present_months(engine, spec.table)
         missing = sorted(expected - present)
-        # Extra periods outside expected are WARN for window tables (trend may include 2025),
-        # FAIL for month-scoped reporting layers when unexpected future/past gaps matter.
         if spec.scope == "window_contains_month":
-            # Must contain all expected; extras allowed (broader trend window).
             ok = not missing
             extra = sorted(present - expected)
             detail_parts = []
@@ -149,7 +152,6 @@ def check_layer_coverage(
                     "extra_ok=" + ",".join(m.strftime("%Y-%m") for m in extra[:6])
                     + ("..." if len(extra) > 6 else "")
                 )
-            # Also verify each expected month has rows > 0 (already implied by DISTINCT).
             empty_expected = []
             for m in expected_months:
                 sql_c = text(
@@ -196,7 +198,6 @@ def check_layer_coverage(
                 detail_parts.append(
                     "extra=" + ",".join(m.strftime("%Y-%m") for m in extra)
                 )
-                # Extra months on month-scoped reporting tables → WARN (not critical fail)
                 checks.append(
                     SuiteCheck(
                         category="coverage",
@@ -230,21 +231,30 @@ def check_coverage(
     cdm_end: date,
 ) -> list[SuiteCheck]:
     """Full Monthly coverage suite across RAW/CALC/CDM."""
-    from analytics_reporting_platform.cdm.models import DEFAULT_REPORT_START
+    from analytics_reporting_platform.cdm.models import DEFAULT_TREND_START
 
     checks: list[SuiteCheck] = []
     adobe_raw = tuple(s for s in RAW_SPECS if s.mart != "wordstat_brand_queries")
     wordstat_raw = tuple(s for s in RAW_SPECS if s.mart == "wordstat_brand_queries")
+    adobe_calc = tuple(s for s in CALC_SPECS if s.mart != "brand_demand")
+    brand_calc = tuple(s for s in CALC_SPECS if s.mart == "brand_demand")
+    adobe_cdm = tuple(s for s in CDM_SPECS if s.mart != "organic_brand_demand")
+    brand_cdm = tuple(s for s in CDM_SPECS if s.mart == "organic_brand_demand")
+
+    checks.append(
+        _layer_inventory_check(layer="raw", engine=engines["raw"], specs=RAW_SPECS)
+    )
     checks.extend(
         check_layer_coverage(
             layer="raw",
             engines=engines,
             specs=adobe_raw,
             expected_months=month_range(raw_start, raw_end),
+            include_inventory=False,
         )
     )
     if wordstat_raw:
-        ws_start = max(raw_start, DEFAULT_REPORT_START)
+        ws_start = max(raw_start, DEFAULT_TREND_START)
         if ws_start <= raw_end:
             checks.extend(
                 check_layer_coverage(
@@ -252,24 +262,61 @@ def check_coverage(
                     engines=engines,
                     specs=wordstat_raw,
                     expected_months=month_range(ws_start, raw_end),
+                    include_inventory=False,
                 )
             )
+
+    checks.append(
+        _layer_inventory_check(layer="calc", engine=engines["calc"], specs=CALC_SPECS)
+    )
     checks.extend(
         check_layer_coverage(
             layer="calc",
             engines=engines,
-            specs=CALC_SPECS,
+            specs=adobe_calc,
             expected_months=month_range(calc_start, calc_end),
+            include_inventory=False,
         )
+    )
+    if brand_calc:
+        bd_start = max(raw_start, DEFAULT_TREND_START)
+        bd_end = raw_end if raw_end >= calc_end else calc_end
+        if bd_start <= bd_end:
+            checks.extend(
+                check_layer_coverage(
+                    layer="calc",
+                    engines=engines,
+                    specs=brand_calc,
+                    expected_months=month_range(bd_start, bd_end),
+                    include_inventory=False,
+                )
+            )
+
+    checks.append(
+        _layer_inventory_check(layer="cdm", engine=engines["cdm"], specs=CDM_SPECS)
     )
     checks.extend(
         check_layer_coverage(
             layer="cdm",
             engines=engines,
-            specs=CDM_SPECS,
+            specs=adobe_cdm,
             expected_months=month_range(cdm_start, cdm_end),
+            include_inventory=False,
         )
     )
+    if brand_cdm:
+        bd_start = max(raw_start, DEFAULT_TREND_START)
+        bd_end = raw_end if raw_end >= cdm_end else cdm_end
+        if bd_start <= bd_end:
+            checks.extend(
+                check_layer_coverage(
+                    layer="cdm",
+                    engines=engines,
+                    specs=brand_cdm,
+                    expected_months=month_range(bd_start, bd_end),
+                    include_inventory=False,
+                )
+            )
     return checks
 
 

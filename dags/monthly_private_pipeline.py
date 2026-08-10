@@ -1,11 +1,13 @@
 """Monthly private operational pipeline DAG (single ARP Monthly DAG).
 
 Graph:
-  determine_periods → load_raw → build_calc → build_cdm → data_quality → final_status
+  determine_periods → [load_raw | load_wordstat_raw] → build_calc → build_cdm
+    → data_quality → final_status
 
 Modes:
   incremental (default) — missing completed months from PostgreSQL, then DQ
-    (empty DB → automatic full init: RAW from 2025-01, CALC/CDM from 2026-01)
+    (empty DB → automatic full init: RAW from 2025-01, CALC/CDM from 2025-01
+    for Brand Demand / from 2026-01 for Adobe reporting marts)
   rebuild — manual force range via rebuild_start / rebuild_end, then DQ
   validate — ETL NO-OP; read-only Monthly DWH validation only
 
@@ -19,7 +21,8 @@ Timezone: Europe/Moscow.
 Schedule: 08:00 on day 1 of each month (Europe/Moscow).
 Scheduled planning uses ``data_interval_end`` as as-of date when present.
 
-Concurrency: max_active_runs=1. No parallel Adobe extraction.
+Concurrency: max_active_runs=1. Adobe and Wordstat RAW may run in parallel
+(max_active_tasks=2); no parallel Adobe extraction within load_raw.
 Safe defaults: mode=incremental, dry_run=True.
 """
 
@@ -63,7 +66,7 @@ for _candidate in _REPO_CANDIDATES:
         if text not in sys.path:
             sys.path.insert(0, text)
 
-# No Airflow-level retries on multi-month stages (Adobe client already retries).
+# No Airflow-level retries on multi-month stages (Adobe / Wordstat clients retry).
 DEFAULT_RETRIES = 0
 DEFAULT_RETRY_DELAY = timedelta(minutes=10)
 STAGE_EXECUTION_TIMEOUT = timedelta(hours=72)
@@ -196,10 +199,11 @@ def task_determine_periods(**context: Any) -> dict[str, Any]:
     )
     logger.info(
         "mode=%s stage=DETERMINE_PERIODS status=SUCCESS last_complete_month=%s "
-        "raw=%s calc=%s cdm=%s dry_run=%s schedule_as_of=%s",
+        "raw=%s wordstat=%s calc=%s cdm=%s dry_run=%s schedule_as_of=%s",
         payload["mode"],
         payload["last_complete_month"],
         payload["raw_periods"],
+        payload["wordstat_periods"],
         payload["calc_periods"],
         payload["cdm_periods"],
         payload["dry_run"],
@@ -217,9 +221,12 @@ def _task_run_stage(stage: str, **context: Any) -> dict[str, Any]:
 
     ti = context["ti"]
     plan = _plan_from_xcom(ti)
-    period_key = {"raw": "raw_periods", "calc": "calc_periods", "cdm": "cdm_periods"}[
-        stage
-    ]
+    period_key = {
+        "raw": "raw_periods",
+        "wordstat_raw": "wordstat_periods",
+        "calc": "calc_periods",
+        "cdm": "cdm_periods",
+    }[stage]
     periods = getattr(plan, period_key)
     env_file, client_config = _config_paths_from_context()
     schedule_as_of = _schedule_as_of_from_context(context)
@@ -246,6 +253,11 @@ def _task_run_stage(stage: str, **context: Any) -> dict[str, Any]:
 def task_load_raw(**context: Any) -> dict[str, Any]:
     """Adobe → RAW for planned raw_periods (NO-OP when empty / mode=validate)."""
     return _task_run_stage("raw", **context)
+
+
+def task_load_wordstat_raw(**context: Any) -> dict[str, Any]:
+    """Yandex Wordstat → RAW for planned wordstat_periods (range extract)."""
+    return _task_run_stage("wordstat_raw", **context)
 
 
 def task_build_calc(**context: Any) -> dict[str, Any]:
@@ -312,6 +324,7 @@ def task_final_status(**context: Any) -> dict[str, Any]:
     ti = context["ti"]
     plan = _plan_from_xcom(ti)
     raw_p = ti.xcom_pull(task_ids="load_raw") or {}
+    wordstat_p = ti.xcom_pull(task_ids="load_wordstat_raw") or {}
     calc_p = ti.xcom_pull(task_ids="build_calc") or {}
     cdm_p = ti.xcom_pull(task_ids="build_cdm") or {}
     dq_p = ti.xcom_pull(task_ids="data_quality") or {}
@@ -322,9 +335,11 @@ def task_final_status(**context: Any) -> dict[str, Any]:
         "dry_run": plan.dry_run,
         "last_complete_month": plan.last_complete_month,
         "raw_periods": list(plan.raw_periods),
+        "wordstat_periods": list(plan.wordstat_periods),
         "calc_periods": list(plan.calc_periods),
         "cdm_periods": list(plan.cdm_periods),
         "raw_status": raw_p.get("status"),
+        "wordstat_status": wordstat_p.get("status"),
         "calc_status": calc_p.get("status"),
         "cdm_status": cdm_p.get("status"),
         "data_quality_status": dq_p.get("final_status") or dq_p.get("status"),
@@ -357,7 +372,7 @@ default_args = {
 with DAG(
     dag_id=MONTHLY_DAG_ID,
     description=(
-        "Private Monthly Adobe → RAW → CALC → CDM + DWH validation "
+        "Private Monthly Adobe + Wordstat → RAW → CALC → CDM + DWH validation "
         "(incremental / rebuild / validate)"
     ),
     default_args=default_args,
@@ -365,7 +380,7 @@ with DAG(
     start_date=datetime(2026, 1, 1, tzinfo=DAG_TZ),
     catchup=False,
     max_active_runs=1,
-    max_active_tasks=1,
+    max_active_tasks=2,
     tags=["monthly", "private", "arp"],
     params={
         "mode": Param(
@@ -390,8 +405,8 @@ with DAG(
             default=True,
             type="boolean",
             description=(
-                "Safe default for incremental/rebuild: no Adobe / DB writes until cleared. "
-                "Ignored for mode=validate (always read-only DQ)."
+                "Safe default for incremental/rebuild: no Adobe/Wordstat / DB writes "
+                "until cleared. Ignored for mode=validate (always read-only DQ)."
             ),
         ),
     },
@@ -404,6 +419,11 @@ with DAG(
     load_raw = PythonOperator(
         task_id="load_raw",
         python_callable=task_load_raw,
+        execution_timeout=STAGE_EXECUTION_TIMEOUT,
+    )
+    load_wordstat_raw = PythonOperator(
+        task_id="load_wordstat_raw",
+        python_callable=task_load_wordstat_raw,
         execution_timeout=STAGE_EXECUTION_TIMEOUT,
     )
     build_calc = PythonOperator(
@@ -428,11 +448,5 @@ with DAG(
         retries=0,
     )
 
-    (
-        determine_periods
-        >> load_raw
-        >> build_calc
-        >> build_cdm
-        >> data_quality
-        >> final_status
-    )
+    determine_periods >> [load_raw, load_wordstat_raw] >> build_calc
+    build_calc >> build_cdm >> data_quality >> final_status

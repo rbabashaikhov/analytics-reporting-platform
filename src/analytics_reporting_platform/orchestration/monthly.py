@@ -268,6 +268,7 @@ SAFE_RESULT_FIELDS: tuple[str, ...] = (
     "mode",
     "dry_run",
     "raw_status",
+    "wordstat_status",
     "calc_status",
     "cdm_status",
     "overall_status",
@@ -296,6 +297,7 @@ def safe_result_payload(result: MonthlyExecutionResult) -> dict[str, Any]:
         "mode": result.mode,
         "dry_run": result.dry_run,
         "raw_status": result.raw_status,
+        "wordstat_status": result.wordstat_status,
         "calc_status": result.calc_status,
         "cdm_status": result.cdm_status,
         "overall_status": result.overall_status,
@@ -399,9 +401,10 @@ def run_stage_for_airflow(
         run_monthly_calc,
         run_monthly_cdm,
         run_monthly_raw,
+        run_monthly_wordstat_raw,
     )
 
-    if stage not in {"raw", "calc", "cdm"}:
+    if stage not in {"raw", "wordstat_raw", "calc", "cdm"}:
         raise MonthlyOrchestrationError(f"Unsupported stage: {stage!r}")
 
     logger.info(
@@ -418,6 +421,7 @@ def run_stage_for_airflow(
     as_of = today if today is not None else date.today()
     runners = {
         "raw": run_monthly_raw,
+        "wordstat_raw": run_monthly_wordstat_raw,
         "calc": run_monthly_calc,
         "cdm": run_monthly_cdm,
     }
@@ -555,8 +559,10 @@ def run_stage_periods_for_airflow(
     client_config: Optional[str] = None,
     today: Optional[date] = None,
 ) -> dict[str, Any]:
-    """Run one Monthly stage sequentially over ``periods`` (fail-fast, no parallel Adobe).
+    """Run one Monthly stage over ``periods`` (fail-fast).
 
+    Adobe RAW/CALC/CDM run sequentially per month (no parallel Adobe).
+    Wordstat RAW uses range extraction (two API calls for a multi-month span).
     Empty ``periods`` → success / no-op. Does not add Airflow-level retries.
     """
     from analytics_reporting_platform.execution.models import StageRunResult
@@ -564,13 +570,19 @@ def run_stage_periods_for_airflow(
         run_monthly_calc,
         run_monthly_cdm,
         run_monthly_raw,
+        run_wordstat_raw_periods,
     )
     from analytics_reporting_platform.execution.monthly_plan import reject_incomplete_month
 
-    if stage not in {"raw", "calc", "cdm"}:
+    if stage not in {"raw", "wordstat_raw", "calc", "cdm"}:
         raise MonthlyOrchestrationError(f"Unsupported stage: {stage!r}")
 
-    stage_upper = {"raw": "RAW", "calc": "CALC", "cdm": "CDM"}[stage]
+    stage_upper = {
+        "raw": "RAW",
+        "wordstat_raw": "WORDSTAT_RAW",
+        "calc": "CALC",
+        "cdm": "CDM",
+    }[stage]
     period_list = [str(p) for p in periods]
     if not period_list:
         logger.info(
@@ -599,6 +611,67 @@ def run_stage_periods_for_airflow(
         placeholder, deps=deps, env_file=env_file, client_config=client_config
     )
     as_of = today if today is not None else date.today()
+
+    if stage == "wordstat_raw":
+        months = [reject_incomplete_month(p, today=as_of) for p in period_list]
+        logger.info(
+            "mode=%s stage=%s period=%s..%s status=START months=%s",
+            mode,
+            stage_upper,
+            period_list[0],
+            period_list[-1],
+            len(period_list),
+        )
+        try:
+            stage_result = run_wordstat_raw_periods(
+                months,
+                mode=mode,
+                deps=effective_deps,
+                dry_run=dry_run,
+            )
+        except (PeriodValidationError, MonthlyExecutionError) as exc:
+            logger.error(
+                "mode=%s stage=%s status=FAILED error=%s",
+                mode,
+                stage_upper,
+                exc,
+            )
+            raise MonthlyOrchestrationError(
+                f"stage={stage_upper} status=FAILED detail={exc}"
+            ) from exc
+        payload = safe_stage_payload(
+            period=months[-1],
+            mode=mode,
+            dry_run=dry_run,
+            stage_result=stage_result,
+        )
+        status = str(stage_result.status).upper()
+        logger.info(
+            "mode=%s stage=%s period=%s..%s status=%s",
+            mode,
+            stage_upper,
+            period_list[0],
+            period_list[-1],
+            status,
+        )
+        if stage_result.status == "failed":
+            raise MonthlyOrchestrationError(
+                f"stage={stage_upper} status=FAILED "
+                f"mart={payload.get('failed_mart') or '-'} "
+                f"detail={stage_result.error or 'failed'}"
+            )
+        overall = "planned" if dry_run else (
+            "skipped" if stage_result.status == "skipped" else "success"
+        )
+        return {
+            "stage": stage,
+            "status": overall,
+            "mode": mode,
+            "dry_run": dry_run,
+            "periods": period_list,
+            "period_results": [payload],
+        }
+
     runners = {
         "raw": run_monthly_raw,
         "calc": run_monthly_calc,
@@ -615,7 +688,7 @@ def run_stage_periods_for_airflow(
             period,
         )
         try:
-            stage_result: StageRunResult = runners[stage](
+            stage_result = runners[stage](
                 period,
                 mode=mode,
                 deps=effective_deps,

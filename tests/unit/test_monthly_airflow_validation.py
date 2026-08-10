@@ -144,13 +144,16 @@ def test_dag_graph_includes_data_quality() -> None:
     assert set(dag.task_ids) == {
         "determine_periods",
         "load_raw",
+        "load_wordstat_raw",
         "build_calc",
         "build_cdm",
         "data_quality",
         "final_status",
     }
     assert "load_raw" in dag.get_task("determine_periods").downstream_task_ids
+    assert "load_wordstat_raw" in dag.get_task("determine_periods").downstream_task_ids
     assert "build_calc" in dag.get_task("load_raw").downstream_task_ids
+    assert "build_calc" in dag.get_task("load_wordstat_raw").downstream_task_ids
     assert "build_cdm" in dag.get_task("build_calc").downstream_task_ids
     assert "data_quality" in dag.get_task("build_cdm").downstream_task_ids
     assert "final_status" in dag.get_task("data_quality").downstream_task_ids
@@ -171,6 +174,7 @@ def test_dag_ast_task_order_and_validate_mode() -> None:
     assert task_ids == [
         "determine_periods",
         "load_raw",
+        "load_wordstat_raw",
         "build_calc",
         "build_cdm",
         "data_quality",
@@ -184,6 +188,7 @@ def test_plan_validate_is_etl_noop() -> None:
     plan = plan_validate_periods(today=TODAY, dry_run=True)
     assert plan.mode == "validate"
     assert plan.raw_periods == ()
+    assert plan.wordstat_periods == ()
     assert plan.calc_periods == ()
     assert plan.cdm_periods == ()
     assert plan.last_complete_month == "2026-07"

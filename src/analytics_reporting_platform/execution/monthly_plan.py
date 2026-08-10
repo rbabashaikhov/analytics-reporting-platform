@@ -49,12 +49,14 @@ class MonthlyPeriodsPlan:
     dry_run: bool = True
     rebuild_start: Optional[str] = None
     rebuild_end: Optional[str] = None
+    wordstat_periods: tuple[str, ...] = ()
 
     def to_safe_dict(self) -> dict[str, Any]:
         return {
             "mode": self.mode,
             "last_complete_month": self.last_complete_month,
             "raw_periods": list(self.raw_periods),
+            "wordstat_periods": list(self.wordstat_periods),
             "calc_periods": list(self.calc_periods),
             "cdm_periods": list(self.cdm_periods),
             "dry_run": self.dry_run,
@@ -138,31 +140,70 @@ def _table_has_month(engine: Any, table: str, month: date) -> bool:
     return row is not None
 
 
-def raw_month_present(raw_engine: Any, month: date) -> bool:
-    """True when all Monthly RAW marts required for ``month`` have rows.
-
-    Wordstat Brand Demand is required only for reporting months (>= 2026-01).
-    """
-    from analytics_reporting_platform.execution.monthly import raw_marts_for_month
+def adobe_raw_month_present(raw_engine: Any, month: date) -> bool:
+    """True when all Adobe Monthly RAW marts have rows for ``month``."""
+    from analytics_reporting_platform.execution.monthly import ADOBE_RAW_MARTS
     from analytics_reporting_platform.raw.repository import month_exists
 
-    return all(
-        month_exists(raw_engine, mart, month) for mart in raw_marts_for_month(month)
+    return all(month_exists(raw_engine, mart, month) for mart in ADOBE_RAW_MARTS)
+
+
+def wordstat_raw_month_present(raw_engine: Any, month: date) -> bool:
+    """True when Wordstat Brand Demand RAW is present for ``month``."""
+    from analytics_reporting_platform.execution.monthly import (
+        WORDSTAT_RAW_MART,
+        WORDSTAT_RAW_START,
+        wordstat_raw_month_complete,
+    )
+
+    if month < WORDSTAT_RAW_START:
+        return True
+    return wordstat_raw_month_complete(raw_engine, month)
+
+
+def raw_month_present(raw_engine: Any, month: date) -> bool:
+    """True when Adobe + Wordstat RAW required for ``month`` are present."""
+    return adobe_raw_month_present(raw_engine, month) and wordstat_raw_month_present(
+        raw_engine, month
     )
 
 
 def calc_month_present(calc_engine: Any, month: date) -> bool:
-    """True when all Monthly CALC marts have rows for ``month``."""
+    """True when required Monthly CALC marts for ``month`` are present.
+
+    Adobe CALC marts are required from reporting start (2026-01).
+    Brand Demand CALC is required from trend start (2025-01).
+    """
     from analytics_reporting_platform.validation.specs import CALC_SPECS
 
-    return all(_table_has_month(calc_engine, spec.table, month) for spec in CALC_SPECS)
+    adobe = tuple(s for s in CALC_SPECS if s.mart != "brand_demand")
+    brand = tuple(s for s in CALC_SPECS if s.mart == "brand_demand")
+    if month >= DEFAULT_REPORTING_START:
+        if not all(_table_has_month(calc_engine, spec.table, month) for spec in adobe):
+            return False
+    if month >= DEFAULT_TREND_START and brand:
+        if not all(_table_has_month(calc_engine, spec.table, month) for spec in brand):
+            return False
+    return True
 
 
 def cdm_month_present(cdm_engine: Any, month: date) -> bool:
-    """True when all Monthly CDM marts contain ``month``."""
+    """True when required Monthly CDM marts for ``month`` are present.
+
+    Adobe CDM marts are required from reporting start (2026-01).
+    Organic Brand Demand CDM is required from trend start (2025-01).
+    """
     from analytics_reporting_platform.validation.specs import CDM_SPECS
 
-    return all(_table_has_month(cdm_engine, spec.table, month) for spec in CDM_SPECS)
+    adobe = tuple(s for s in CDM_SPECS if s.mart != "organic_brand_demand")
+    brand = tuple(s for s in CDM_SPECS if s.mart == "organic_brand_demand")
+    if month >= DEFAULT_REPORTING_START:
+        if not all(_table_has_month(cdm_engine, spec.table, month) for spec in adobe):
+            return False
+    if month >= DEFAULT_TREND_START and brand:
+        if not all(_table_has_month(cdm_engine, spec.table, month) for spec in brand):
+            return False
+    return True
 
 
 def _missing_months(
@@ -190,6 +231,7 @@ def plan_validate_periods(
         mode="validate",
         last_complete_month=_ym(last),
         raw_periods=(),
+        wordstat_periods=(),
         calc_periods=(),
         cdm_periods=(),
         dry_run=dry_run,
@@ -224,13 +266,16 @@ def plan_rebuild_periods(
         )
 
     raw = _months_yyyy_mm(start, end)
-    reporting = _clip_reporting(raw)
+    wordstat = tuple(m for m in raw if m >= _ym(DEFAULT_TREND_START))
+    # Brand Demand CALC/CDM follows Wordstat history; Adobe CALC/CDM still
+    # only execute for months >= 2026-01 inside stage runners.
     return MonthlyPeriodsPlan(
         mode="rebuild",
         last_complete_month=_ym(last),
         raw_periods=raw,
-        calc_periods=reporting,
-        cdm_periods=reporting,
+        wordstat_periods=wordstat,
+        calc_periods=wordstat,
+        cdm_periods=wordstat,
         dry_run=dry_run,
         rebuild_start=_ym(start),
         rebuild_end=_ym(end),
@@ -242,6 +287,7 @@ def plan_incremental_periods(
     today: Optional[date] = None,
     dry_run: bool = True,
     raw_present: Optional[LayerPresenceFn] = None,
+    wordstat_present: Optional[LayerPresenceFn] = None,
     calc_present: Optional[LayerPresenceFn] = None,
     cdm_present: Optional[LayerPresenceFn] = None,
     raw_engine: Any = None,
@@ -257,16 +303,16 @@ def plan_incremental_periods(
             mode="incremental",
             last_complete_month=_ym(last),
             raw_periods=(),
+            wordstat_periods=(),
             calc_periods=(),
             cdm_periods=(),
             dry_run=dry_run,
         )
 
     raw_candidates = _months_yyyy_mm(DEFAULT_RAW_START, last)
-    if last >= DEFAULT_REPORTING_START:
-        reporting_candidates = _months_yyyy_mm(DEFAULT_REPORTING_START, last)
-    else:
-        reporting_candidates = ()
+    wordstat_candidates = _months_yyyy_mm(DEFAULT_TREND_START, last)
+    # CALC/CDM candidates include Brand Demand history from trend start.
+    calc_candidates = _months_yyyy_mm(DEFAULT_TREND_START, last)
 
     probe_raw = raw_present
     if probe_raw is None:
@@ -276,7 +322,17 @@ def plan_incremental_periods(
             )
 
         def probe_raw(month: date, _engine: Any = raw_engine) -> bool:
-            return raw_month_present(_engine, month)
+            return adobe_raw_month_present(_engine, month)
+
+    probe_wordstat = wordstat_present
+    if probe_wordstat is None:
+        if raw_engine is None:
+            raise PeriodValidationError(
+                "incremental planning requires raw_engine or wordstat_present probe"
+            )
+
+        def probe_wordstat(month: date, _engine: Any = raw_engine) -> bool:
+            return wordstat_raw_month_present(_engine, month)
 
     probe_calc = calc_present
     if probe_calc is None:
@@ -299,13 +355,15 @@ def plan_incremental_periods(
             return cdm_month_present(_engine, month)
 
     raw_missing = _missing_months(raw_candidates, is_present=probe_raw)
-    calc_missing = _missing_months(reporting_candidates, is_present=probe_calc)
-    cdm_missing = _missing_months(reporting_candidates, is_present=probe_cdm)
+    wordstat_missing = _missing_months(wordstat_candidates, is_present=probe_wordstat)
+    calc_missing = _missing_months(calc_candidates, is_present=probe_calc)
+    cdm_missing = _missing_months(calc_candidates, is_present=probe_cdm)
 
     return MonthlyPeriodsPlan(
         mode="incremental",
         last_complete_month=_ym(last),
         raw_periods=raw_missing,
+        wordstat_periods=wordstat_missing,
         calc_periods=calc_missing,
         cdm_periods=cdm_missing,
         dry_run=dry_run,
@@ -320,6 +378,7 @@ def plan_monthly_periods(
     dry_run: Any = None,
     today: Optional[date] = None,
     raw_present: Optional[LayerPresenceFn] = None,
+    wordstat_present: Optional[LayerPresenceFn] = None,
     calc_present: Optional[LayerPresenceFn] = None,
     cdm_present: Optional[LayerPresenceFn] = None,
     raw_engine: Any = None,
@@ -375,6 +434,7 @@ def plan_monthly_periods(
             today=today,
             dry_run=resolved_dry,
             raw_present=raw_present,
+            wordstat_present=wordstat_present,
             calc_present=calc_present,
             cdm_present=cdm_present,
             raw_engine=raw_engine,
@@ -384,10 +444,11 @@ def plan_monthly_periods(
 
     logger.info(
         "monthly_periods_plan mode=%s last_complete_month=%s "
-        "raw_periods=%s calc_periods=%s cdm_periods=%s dry_run=%s",
+        "raw_periods=%s wordstat_periods=%s calc_periods=%s cdm_periods=%s dry_run=%s",
         plan.mode,
         plan.last_complete_month,
         list(plan.raw_periods),
+        list(plan.wordstat_periods),
         list(plan.calc_periods),
         list(plan.cdm_periods),
         plan.dry_run,
@@ -401,6 +462,7 @@ def plan_from_safe_dict(data: Mapping[str, Any]) -> MonthlyPeriodsPlan:
         mode=_resolve_mode(data.get("mode", "incremental")),
         last_complete_month=str(data["last_complete_month"]),
         raw_periods=tuple(str(x) for x in (data.get("raw_periods") or ())),
+        wordstat_periods=tuple(str(x) for x in (data.get("wordstat_periods") or ())),
         calc_periods=tuple(str(x) for x in (data.get("calc_periods") or ())),
         cdm_periods=tuple(str(x) for x in (data.get("cdm_periods") or ())),
         dry_run=_coerce_bool(data.get("dry_run"), default=True),
@@ -413,6 +475,7 @@ __all__ = [
     "DEFAULT_RAW_START",
     "DEFAULT_REPORTING_START",
     "MonthlyPeriodsPlan",
+    "adobe_raw_month_present",
     "calc_month_present",
     "cdm_month_present",
     "plan_from_safe_dict",
@@ -422,4 +485,5 @@ __all__ = [
     "plan_validate_periods",
     "raw_month_present",
     "reject_incomplete_month",
+    "wordstat_raw_month_present",
 ]

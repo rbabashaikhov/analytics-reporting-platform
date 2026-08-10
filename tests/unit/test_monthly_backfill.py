@@ -47,11 +47,12 @@ def test_last_complete_month_guard() -> None:
 
 
 def test_incremental_clean_db_full_init_plan() -> None:
-    """Clean DB on 2026-08-10 → RAW 2025-01..2026-07, CALC/CDM 2026-01..2026-07."""
+    """Clean DB on 2026-08-10 → RAW/Wordstat/CALC/CDM Brand Demand 2025-01..2026-07."""
     plan = plan_incremental_periods(
         today=TODAY,
         dry_run=True,
         raw_present=_present_set(set()),
+        wordstat_present=_present_set(set()),
         calc_present=_present_set(set()),
         cdm_present=_present_set(set()),
     )
@@ -60,7 +61,8 @@ def test_incremental_clean_db_full_init_plan() -> None:
     assert plan.raw_periods[0] == "2025-01"
     assert plan.raw_periods[-1] == "2026-07"
     assert len(plan.raw_periods) == 19
-    assert plan.calc_periods == tuple(f"2026-{m:02d}" for m in range(1, 8))
+    assert plan.wordstat_periods == plan.raw_periods
+    assert plan.calc_periods == plan.raw_periods
     assert plan.cdm_periods == plan.calc_periods
     assert all(not p.startswith("2024") for p in plan.raw_periods)
     assert "2026-08" not in plan.raw_periods
@@ -68,36 +70,38 @@ def test_incremental_clean_db_full_init_plan() -> None:
 
 def test_incremental_future_only_aug_when_filled_to_jul() -> None:
     """DB filled through 2026-07; as-of September → only 2026-08 missing."""
-    filled_raw = {f"2025-{m:02d}" for m in range(1, 13)} | {
+    filled = {f"2025-{m:02d}" for m in range(1, 13)} | {
         f"2026-{m:02d}" for m in range(1, 8)
     }
-    filled_rep = {f"2026-{m:02d}" for m in range(1, 8)}
     plan = plan_incremental_periods(
         today=date(2026, 9, 10),
         dry_run=True,
-        raw_present=_present_set(filled_raw),
-        calc_present=_present_set(filled_rep),
-        cdm_present=_present_set(filled_rep),
+        raw_present=_present_set(filled),
+        wordstat_present=_present_set(filled),
+        calc_present=_present_set(filled),
+        cdm_present=_present_set(filled),
     )
     assert plan.last_complete_month == "2026-08"
     assert plan.raw_periods == ("2026-08",)
+    assert plan.wordstat_periods == ("2026-08",)
     assert plan.calc_periods == ("2026-08",)
     assert plan.cdm_periods == ("2026-08",)
 
 
 def test_incremental_noop_when_complete() -> None:
-    filled_raw = {f"2025-{m:02d}" for m in range(1, 13)} | {
+    filled = {f"2025-{m:02d}" for m in range(1, 13)} | {
         f"2026-{m:02d}" for m in range(1, 8)
     }
-    filled_rep = {f"2026-{m:02d}" for m in range(1, 8)}
     plan = plan_incremental_periods(
         today=TODAY,
         dry_run=True,
-        raw_present=_present_set(filled_raw),
-        calc_present=_present_set(filled_rep),
-        cdm_present=_present_set(filled_rep),
+        raw_present=_present_set(filled),
+        wordstat_present=_present_set(filled),
+        calc_present=_present_set(filled),
+        cdm_present=_present_set(filled),
     )
     assert plan.raw_periods == ()
+    assert plan.wordstat_periods == ()
     assert plan.calc_periods == ()
     assert plan.cdm_periods == ()
 
@@ -112,6 +116,7 @@ def test_rebuild_single_month_2026() -> None:
     assert plan.rebuild_start == "2026-03"
     assert plan.rebuild_end == "2026-03"
     assert plan.raw_periods == ("2026-03",)
+    assert plan.wordstat_periods == ("2026-03",)
     assert plan.calc_periods == ("2026-03",)
     assert plan.cdm_periods == ("2026-03",)
 
@@ -124,8 +129,9 @@ def test_rebuild_range_across_boundary() -> None:
         dry_run=True,
     )
     assert plan.raw_periods == ("2025-11", "2025-12", "2026-01", "2026-02")
-    assert plan.calc_periods == ("2026-01", "2026-02")
-    assert plan.cdm_periods == ("2026-01", "2026-02")
+    assert plan.wordstat_periods == plan.raw_periods
+    assert plan.calc_periods == plan.raw_periods
+    assert plan.cdm_periods == plan.raw_periods
 
 
 def test_rebuild_raw_only_2025_range() -> None:
@@ -136,8 +142,9 @@ def test_rebuild_raw_only_2025_range() -> None:
         dry_run=True,
     )
     assert plan.raw_periods == ("2025-05", "2025-06", "2025-07", "2025-08")
-    assert plan.calc_periods == ()
-    assert plan.cdm_periods == ()
+    assert plan.wordstat_periods == plan.raw_periods
+    assert plan.calc_periods == plan.raw_periods
+    assert plan.cdm_periods == plan.raw_periods
 
 
 def test_rebuild_rejects_current_month() -> None:
@@ -163,6 +170,7 @@ def test_incremental_ignores_rebuild_params() -> None:
         today=TODAY,
         dry_run=True,
         raw_present=_present_set(set()),
+        wordstat_present=_present_set(set()),
         calc_present=_present_set(set()),
         cdm_present=_present_set(set()),
     )
@@ -175,6 +183,7 @@ def test_default_mode_and_dry_run() -> None:
     plan = plan_monthly_periods(
         today=TODAY,
         raw_present=_present_set({"2025-01"}),
+        wordstat_present=_present_set({"2025-01"}),
         calc_present=_present_set(set()),
         cdm_present=_present_set(set()),
     )
@@ -248,6 +257,75 @@ def test_stage_sequential_fail_fast() -> None:
     assert not any("2025-03" in c for c in calls)
 
 
+def test_wordstat_failure_blocks_calc_without_rerunning_adobe() -> None:
+    """Wordstat FAIL → calc/cdm not executed; Adobe RAW already done stays done."""
+    adobe_calls: list[str] = []
+    wordstat_calls: list[str] = []
+    calc_calls: list[str] = []
+
+    def fake_adobe(month, **kwargs):
+        adobe_calls.append("raw")
+        return SimpleNamespace(stage="raw", status="success", marts=(), error=None)
+
+    def fake_wordstat(periods, **kwargs):
+        wordstat_calls.append("wordstat")
+        return SimpleNamespace(
+            stage="wordstat_raw",
+            status="failed",
+            marts=(),
+            error="wordstat boom",
+        )
+
+    def fake_calc(month, **kwargs):
+        calc_calls.append("calc")
+        return SimpleNamespace(stage="calc", status="planned", marts=(), error=None)
+
+    deps = SimpleNamespace(
+        raw_engine=object(),
+        calc_engine=object(),
+        cdm_engine=object(),
+        adobe_reports=None,
+        client_config=None,
+        wordstat_client=object(),
+        on_event=None,
+    )
+    with patch(
+        "analytics_reporting_platform.execution.monthly.run_monthly_raw",
+        side_effect=fake_adobe,
+    ):
+        with patch(
+            "analytics_reporting_platform.execution.monthly.run_wordstat_raw_periods",
+            side_effect=fake_wordstat,
+        ):
+            with patch(
+                "analytics_reporting_platform.execution.monthly.run_monthly_calc",
+                side_effect=fake_calc,
+            ):
+                assert (
+                    run_stage_periods_for_airflow(
+                        "raw",
+                        ["2026-07"],
+                        mode="rebuild",
+                        dry_run=False,
+                        today=TODAY,
+                        deps=deps,
+                    )["status"]
+                    == "success"
+                )
+                with pytest.raises(MonthlyOrchestrationError, match="WORDSTAT_RAW"):
+                    run_stage_periods_for_airflow(
+                        "wordstat_raw",
+                        ["2026-07"],
+                        mode="rebuild",
+                        dry_run=False,
+                        today=TODAY,
+                        deps=deps,
+                    )
+    assert adobe_calls == ["raw"]
+    assert wordstat_calls == ["wordstat"]
+    assert calc_calls == []
+
+
 def test_dag_graph_tasks_and_no_weekly() -> None:
     import ast
     from pathlib import Path
@@ -272,6 +350,7 @@ def test_dag_graph_tasks_and_no_weekly() -> None:
     assert task_ids == [
         "determine_periods",
         "load_raw",
+        "load_wordstat_raw",
         "build_calc",
         "build_cdm",
         "data_quality",

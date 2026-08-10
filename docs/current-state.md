@@ -53,14 +53,15 @@ Data model inventory (Monthly):
 
 | Layer | Monthly marts |
 |---|---:|
-| RAW | 3 |
-| CALC | 5 |
-| CDM | 15 |
+| RAW | 4 (3 Adobe + Wordstat brand queries) |
+| CALC | 6 (5 Adobe + brand_demand) |
+| CDM | 16 (15 Adobe + organic_brand_demand) |
 
 Pipeline graph:
 
 ```text
-determine_periods → load_raw → build_calc → build_cdm → data_quality → final_status
+determine_periods → [load_raw | load_wordstat_raw] → build_calc → build_cdm
+  → data_quality → final_status
 ```
 
 Execution modes:

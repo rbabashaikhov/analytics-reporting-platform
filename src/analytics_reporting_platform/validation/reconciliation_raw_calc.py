@@ -39,7 +39,9 @@ def reconcile_raw_to_calc(
     calc_start: date,
     calc_end: date,
 ) -> list[SuiteCheck]:
-    """Run all five CALC mart reconciliations for the CALC coverage window."""
+    """Run CALC mart reconciliations for the CALC coverage window."""
+    from analytics_reporting_platform.cdm.models import DEFAULT_TREND_START
+
     months = month_range(calc_start, calc_end)
     checks: list[SuiteCheck] = []
     checks.extend(_reconcile_monthly_kpi(raw_engine, calc_engine, months))
@@ -47,7 +49,9 @@ def reconcile_raw_to_calc(
     checks.extend(_reconcile_search_engines(raw_engine, calc_engine, months))
     checks.extend(_reconcile_section_share(raw_engine, calc_engine, months))
     checks.extend(_reconcile_explore_bg(raw_engine, calc_engine, months))
-    checks.extend(_reconcile_brand_demand(raw_engine, calc_engine, months))
+    brand_start = DEFAULT_TREND_START if DEFAULT_TREND_START <= calc_end else calc_start
+    brand_months = month_range(brand_start, calc_end)
+    checks.extend(_reconcile_brand_demand(raw_engine, calc_engine, brand_months))
     return checks
 
 

@@ -204,38 +204,23 @@ def test_run_monthly_period_composes_stage_apis() -> None:
     deps = MagicMock()
     deps.on_event = None
     ok = StageRunResult(stage="raw", status="success", marts=())
+    ok_w = StageRunResult(stage="wordstat_raw", status="success", marts=())
     ok_c = StageRunResult(stage="calc", status="success", marts=())
     ok_d = StageRunResult(stage="cdm", status="success", marts=())
-    with patch(
-        "analytics_reporting_platform.execution.monthly.run_monthly_raw", return_value=ok
-    ) as r:
-        with patch(
-            "analytics_reporting_platform.execution.monthly.run_monthly_calc",
-            return_value=ok_c,
-        ) as c:
-            with patch(
-                "analytics_reporting_platform.execution.monthly.run_monthly_cdm",
-                return_value=ok_d,
-            ) as d:
-                # Import after patches on the module functions used by run_monthly_period
-                import analytics_reporting_platform.execution.monthly as monthly_mod
+    import analytics_reporting_platform.execution.monthly as monthly_mod
 
-                # run_monthly_period calls the public stage functions by name in same module
-                with patch.object(monthly_mod, "run_monthly_raw", return_value=ok) as r2:
-                    with patch.object(
-                        monthly_mod, "run_monthly_calc", return_value=ok_c
-                    ) as c2:
-                        with patch.object(
-                            monthly_mod, "run_monthly_cdm", return_value=ok_d
-                        ) as d2:
-                            result = monthly_mod.run_monthly_period(
-                                "2026-07",
-                                mode="incremental",
-                                deps=deps,
-                                today=date(2026, 8, 1),
-                            )
-                            assert r2.called and c2.called and d2.called
-                            assert result.overall_status == "success"
+    with patch.object(monthly_mod, "run_monthly_raw", return_value=ok) as r2:
+        with patch.object(monthly_mod, "run_monthly_wordstat_raw", return_value=ok_w) as w2:
+            with patch.object(monthly_mod, "run_monthly_calc", return_value=ok_c) as c2:
+                with patch.object(monthly_mod, "run_monthly_cdm", return_value=ok_d) as d2:
+                    result = monthly_mod.run_monthly_period(
+                        "2026-07",
+                        mode="incremental",
+                        deps=deps,
+                        today=date(2026, 8, 1),
+                    )
+                    assert r2.called and w2.called and c2.called and d2.called
+                    assert result.overall_status == "success"
 
 
 def test_validation_pass_missing_dup_scope() -> None:
@@ -441,17 +426,21 @@ def test_dag_graph_timezone_and_stage_chain() -> None:
     assert set(dag.task_ids) == {
         "determine_periods",
         "load_raw",
+        "load_wordstat_raw",
         "build_calc",
         "build_cdm",
         "data_quality",
         "final_status",
     }
     assert "load_raw" in dag.get_task("determine_periods").downstream_task_ids
+    assert "load_wordstat_raw" in dag.get_task("determine_periods").downstream_task_ids
     assert "build_calc" in dag.get_task("load_raw").downstream_task_ids
+    assert "build_calc" in dag.get_task("load_wordstat_raw").downstream_task_ids
     assert "build_cdm" in dag.get_task("build_calc").downstream_task_ids
     assert "data_quality" in dag.get_task("build_cdm").downstream_task_ids
     assert "final_status" in dag.get_task("data_quality").downstream_task_ids
     assert dag.max_active_runs == 1
+    assert dag.max_active_tasks == 2
     assert module.DEFAULT_RETRIES == 0
     assert module.STAGE_EXECUTION_TIMEOUT == timedelta(hours=72)
     dry_param = dag.params["dry_run"]
@@ -501,6 +490,7 @@ def test_dag_build_calc_does_not_invoke_raw_runner() -> None:
         "mode": "incremental",
         "last_complete_month": "2026-07",
         "raw_periods": ["2026-07"],
+        "wordstat_periods": ["2026-07"],
         "calc_periods": ["2026-07"],
         "cdm_periods": ["2026-07"],
         "dry_run": True,
@@ -535,6 +525,7 @@ def test_dag_final_status_summary() -> None:
             "mode": "incremental",
             "last_complete_month": "2026-07",
             "raw_periods": ["2026-07"],
+            "wordstat_periods": ["2026-07"],
             "calc_periods": ["2026-07"],
             "cdm_periods": ["2026-07"],
             "dry_run": True,
@@ -542,6 +533,7 @@ def test_dag_final_status_summary() -> None:
             "rebuild_end": None,
         },
         "load_raw": {"stage": "raw", "status": "planned"},
+        "load_wordstat_raw": {"stage": "wordstat_raw", "status": "planned"},
         "build_calc": {"stage": "calc", "status": "planned"},
         "build_cdm": {"stage": "cdm", "status": "planned"},
         "data_quality": {

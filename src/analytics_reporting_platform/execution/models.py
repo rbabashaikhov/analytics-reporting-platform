@@ -7,7 +7,7 @@ from datetime import date
 from typing import Callable, Literal, Optional, Sequence
 
 ExecutionMode = Literal["incremental", "rebuild", "validate"]
-StageName = Literal["raw", "calc", "cdm"]
+StageName = Literal["raw", "wordstat_raw", "calc", "cdm"]
 StageStatus = Literal["success", "failed", "skipped", "planned", "not_run"]
 OverallStatus = Literal["success", "failed", "planned"]
 MartRunStatus = Literal["success", "failed", "skipped", "planned"]
@@ -63,6 +63,7 @@ class MonthlyExecutionResult:
     failed_stage: Optional[StageName] = None
     failed_mart: Optional[str] = None
     error: Optional[str] = None
+    wordstat_status: StageStatus = "not_run"
 
     def summary_lines(self) -> list[str]:
         """Human-readable lines safe for CLI (no secrets / KPI values)."""
@@ -71,6 +72,7 @@ class MonthlyExecutionResult:
             f"mode={self.mode}",
             f"dry_run={self.dry_run}",
             f"raw={self.raw_status}",
+            f"wordstat_raw={self.wordstat_status}",
             f"calc={self.calc_status}",
             f"cdm={self.cdm_status}",
             f"overall={self.overall_status}",

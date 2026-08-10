@@ -43,23 +43,24 @@ Monthly analytics reporting was produced through a partly notebook-driven, manua
 
 ```text
 determine_periods
-        →
-load_raw
-        →
-build_calc
-        →
-build_cdm
-        →
-data_quality
-        →
-final_status
+        ├─→ load_raw              [Adobe]
+        └─→ load_wordstat_raw     [Yandex Wordstat]
+                    ↓
+                build_calc
+                    ↓
+                build_cdm
+                    ↓
+               data_quality
+                    ↓
+               final_status
 ```
 
 | Task | Role |
 |---|---|
 | `determine_periods` | Resolves closed months to process from mode and DWH state |
 | `load_raw` | Sequential Adobe extraction into Monthly RAW marts |
-| `build_calc` | Builds Monthly CALC marts from RAW |
+| `load_wordstat_raw` | Yandex Wordstat Brand Demand RAW (range extract; independent retries) |
+| `build_calc` | Builds Monthly CALC marts from RAW (waits for both RAW tasks) |
 | `build_cdm` | Builds Monthly CDM marts from CALC |
 | `data_quality` | Runs the Monthly DQ suite and persists validation artifacts |
 | `final_status` | Summarizes run outcome; critical DQ FAIL fails the DAG |

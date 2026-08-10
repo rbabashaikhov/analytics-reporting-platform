@@ -45,7 +45,11 @@ def reconcile_calc_to_cdm(
     checks.extend(_cdm_geo_trend(raw_engine, cdm_engine, trend_months))
     checks.extend(_cdm_geo_by_section(calc_engine, cdm_engine, months))
     checks.extend(_cdm_organic_kpi(calc_engine, cdm_engine, months))
-    checks.extend(_cdm_organic_brand_demand(calc_engine, cdm_engine, months))
+    from analytics_reporting_platform.cdm.models import DEFAULT_TREND_START
+
+    brand_start = DEFAULT_TREND_START if DEFAULT_TREND_START <= cdm_end else cdm_start
+    brand_months = month_range(brand_start, cdm_end)
+    checks.extend(_cdm_organic_brand_demand(calc_engine, cdm_engine, brand_months))
     checks.extend(_cdm_organic_engine_mix(calc_engine, cdm_engine, months, cdm_end))
     checks.extend(_cdm_organic_engine_trend(raw_engine, cdm_engine, trend_months))
     checks.extend(_cdm_explore_kpi(calc_engine, cdm_engine, months))

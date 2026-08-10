@@ -50,12 +50,14 @@ def test_dry_run_plan_ordering_and_modes() -> None:
         result = run_monthly_period("2026-07", mode=mode, dry_run=True, today=date(2026, 8, 1))
         assert result.overall_status == "planned"
         assert result.raw_status == "planned"
+        assert result.wordstat_status == "planned"
         assert result.calc_status == "planned"
         assert result.cdm_status == "planned"
-        assert [s.stage for s in result.stages] == ["raw", "calc", "cdm"]
-        assert tuple(m.mart for m in result.stages[0].marts) == RAW_MARTS
-        assert tuple(m.mart for m in result.stages[1].marts) == CALC_MARTS
-        assert tuple(m.mart for m in result.stages[2].marts) == CDM_MARTS
+        assert [s.stage for s in result.stages] == ["raw", "wordstat_raw", "calc", "cdm"]
+        assert tuple(m.mart for m in result.stages[0].marts) == monthly_mod.ADOBE_RAW_MARTS
+        assert tuple(m.mart for m in result.stages[1].marts) == (monthly_mod.WORDSTAT_RAW_MART,)
+        assert tuple(m.mart for m in result.stages[2].marts) == CALC_MARTS
+        assert tuple(m.mart for m in result.stages[3].marts) == CDM_MARTS
 
 
 @dataclass
@@ -83,7 +85,12 @@ def test_raw_failure_stops_calc_cdm(monkeypatch: Any = None) -> None:
         )
 
     calc_called = {"n": 0}
+    wordstat_called = {"n": 0}
     cdm_called = {"n": 0}
+
+    def wordstat_stub(*args, **kwargs):  # type: ignore[no-untyped-def]
+        wordstat_called["n"] += 1
+        raise AssertionError("wordstat must not run")
 
     def calc_stub(*args, **kwargs):  # type: ignore[no-untyped-def]
         calc_called["n"] += 1
@@ -94,9 +101,11 @@ def test_raw_failure_stops_calc_cdm(monkeypatch: Any = None) -> None:
         raise AssertionError("cdm must not run")
 
     orig_raw = monthly_mod._run_raw
+    orig_ws = monthly_mod._run_wordstat_raw
     orig_calc = monthly_mod._run_calc
     orig_cdm = monthly_mod._run_cdm
     monthly_mod._run_raw = boom_raw  # type: ignore[assignment]
+    monthly_mod._run_wordstat_raw = wordstat_stub  # type: ignore[assignment]
     monthly_mod._run_calc = calc_stub  # type: ignore[assignment]
     monthly_mod._run_cdm = cdm_stub  # type: ignore[assignment]
     try:
@@ -105,13 +114,16 @@ def test_raw_failure_stops_calc_cdm(monkeypatch: Any = None) -> None:
         )
     finally:
         monthly_mod._run_raw = orig_raw
+        monthly_mod._run_wordstat_raw = orig_ws
         monthly_mod._run_calc = orig_calc
         monthly_mod._run_cdm = orig_cdm
 
     assert result.overall_status == "failed"
     assert result.failed_stage == "raw"
+    assert result.wordstat_status == "not_run"
     assert result.calc_status == "not_run"
     assert result.cdm_status == "not_run"
+    assert wordstat_called["n"] == 0
     assert calc_called["n"] == 0
     assert cdm_called["n"] == 0
 
@@ -128,7 +140,14 @@ def test_calc_failure_stops_cdm() -> None:
         return StageRunResult(
             stage="raw",
             status="skipped",
-            marts=tuple(MartRunResult(mart=m, status="skipped") for m in RAW_MARTS),
+            marts=tuple(MartRunResult(mart=m, status="skipped") for m in monthly_mod.ADOBE_RAW_MARTS),
+        )
+
+    def ok_wordstat(*args, **kwargs):  # type: ignore[no-untyped-def]
+        return StageRunResult(
+            stage="wordstat_raw",
+            status="skipped",
+            marts=(MartRunResult(mart=monthly_mod.WORDSTAT_RAW_MART, status="skipped"),),
         )
 
     def boom_calc(*args, **kwargs):  # type: ignore[no-untyped-def]
@@ -146,9 +165,11 @@ def test_calc_failure_stops_cdm() -> None:
         raise AssertionError("cdm must not run")
 
     orig_raw = monthly_mod._run_raw
+    orig_ws = monthly_mod._run_wordstat_raw
     orig_calc = monthly_mod._run_calc
     orig_cdm = monthly_mod._run_cdm
     monthly_mod._run_raw = ok_raw  # type: ignore[assignment]
+    monthly_mod._run_wordstat_raw = ok_wordstat  # type: ignore[assignment]
     monthly_mod._run_calc = boom_calc  # type: ignore[assignment]
     monthly_mod._run_cdm = cdm_stub  # type: ignore[assignment]
     try:
@@ -157,12 +178,14 @@ def test_calc_failure_stops_cdm() -> None:
         )
     finally:
         monthly_mod._run_raw = orig_raw
+        monthly_mod._run_wordstat_raw = orig_ws
         monthly_mod._run_calc = orig_calc
         monthly_mod._run_cdm = orig_cdm
 
     assert result.overall_status == "failed"
     assert result.failed_stage == "calc"
     assert result.raw_status == "skipped"
+    assert result.wordstat_status == "skipped"
     assert result.cdm_status == "not_run"
     assert cdm_called["n"] == 0
 
@@ -186,9 +209,13 @@ def test_successful_execution_result() -> None:
         return _inner
 
     orig_raw = monthly_mod._run_raw
+    orig_ws = monthly_mod._run_wordstat_raw
     orig_calc = monthly_mod._run_calc
     orig_cdm = monthly_mod._run_cdm
-    monthly_mod._run_raw = ok_stage("raw", RAW_MARTS)  # type: ignore[assignment]
+    monthly_mod._run_raw = ok_stage("raw", monthly_mod.ADOBE_RAW_MARTS)  # type: ignore[assignment]
+    monthly_mod._run_wordstat_raw = ok_stage(  # type: ignore[assignment]
+        "wordstat_raw", (monthly_mod.WORDSTAT_RAW_MART,)
+    )
     monthly_mod._run_calc = ok_stage("calc", CALC_MARTS)  # type: ignore[assignment]
     monthly_mod._run_cdm = ok_stage("cdm", CDM_MARTS)  # type: ignore[assignment]
     try:
@@ -197,13 +224,14 @@ def test_successful_execution_result() -> None:
         )
     finally:
         monthly_mod._run_raw = orig_raw
+        monthly_mod._run_wordstat_raw = orig_ws
         monthly_mod._run_calc = orig_calc
         monthly_mod._run_cdm = orig_cdm
 
     assert result.overall_status == "success"
     assert result.mode == "rebuild"
     assert result.failed_stage is None
-    assert [s.stage for s in result.stages] == ["raw", "calc", "cdm"]
+    assert [s.stage for s in result.stages] == ["raw", "wordstat_raw", "calc", "cdm"]
 
 
 def test_cli_success_dry_run_exit() -> None:
@@ -227,17 +255,6 @@ def test_cli_failure_exit_future_month() -> None:
 def test_rebuild_vs_incremental_routing() -> None:
     seen: list[str] = []
 
-    def capture(stage: str):  # type: ignore[no-untyped-def]
-        def _inner(deps, month, mode, **kwargs):
-            seen.append(f"{stage}:{mode}")
-            from analytics_reporting_platform.execution.models import StageRunResult
-
-            return StageRunResult(stage=stage, status="planned", marts=())  # type: ignore[arg-type]
-
-        return _inner
-
-    # dry_run uses planned without calling patched? dry_run calls _run_* which respect dry_run
-    # Instead patch and call non-dry with stubs that record mode
     deps = MonthlyPipelineDeps(
         raw_engine=MagicMock(), calc_engine=MagicMock(), cdm_engine=MagicMock()
     )
@@ -250,21 +267,34 @@ def test_rebuild_vs_incremental_routing() -> None:
 
         return _inner
 
-    orig = (monthly_mod._run_raw, monthly_mod._run_calc, monthly_mod._run_cdm)
+    orig = (
+        monthly_mod._run_raw,
+        monthly_mod._run_wordstat_raw,
+        monthly_mod._run_calc,
+        monthly_mod._run_cdm,
+    )
     monthly_mod._run_raw = track("raw")  # type: ignore[assignment]
+    monthly_mod._run_wordstat_raw = track("wordstat_raw")  # type: ignore[assignment]
     monthly_mod._run_calc = track("calc")  # type: ignore[assignment]
     monthly_mod._run_cdm = track("cdm")  # type: ignore[assignment]
     try:
         run_monthly_period("2026-07", mode="incremental", deps=deps, today=date(2026, 8, 1))
         run_monthly_period("2026-07", mode="rebuild", deps=deps, today=date(2026, 8, 1))
     finally:
-        monthly_mod._run_raw, monthly_mod._run_calc, monthly_mod._run_cdm = orig
+        (
+            monthly_mod._run_raw,
+            monthly_mod._run_wordstat_raw,
+            monthly_mod._run_calc,
+            monthly_mod._run_cdm,
+        ) = orig
 
     assert seen == [
         "raw:incremental",
+        "wordstat_raw:incremental",
         "calc:incremental",
         "cdm:incremental",
         "raw:rebuild",
+        "wordstat_raw:rebuild",
         "calc:rebuild",
         "cdm:rebuild",
     ]
